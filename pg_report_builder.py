@@ -1272,7 +1272,10 @@ def inject_ts_advantage_tab(html: str, slug: str, pillars_content: dict) -> str:
     anchor_button = "</div><div class='content'>"
     if html.count(anchor_button) != 1:
         raise ValueError("tab-nav/content boundary not found exactly once — skip injection")
-    html = html.replace(anchor_button, "</div>" + button + "<div class='content'>", 1)
+    # Button must land BEFORE the closing </div> to stay inside .tab-nav --
+    # putting </div> first orphans it between the two containers, where it
+    # gets neither the flex layout nor the dark background styling.
+    html = html.replace(anchor_button, button + "</div><div class='content'>", 1)
 
     sub_nav = "".join(
         f"<button class='tab-btn tab-btn-{tsa_slug}{' active' if i == 0 else ''}' "
