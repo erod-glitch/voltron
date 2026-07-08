@@ -1315,6 +1315,90 @@ def inject_ts_advantage_tab(html: str, slug: str, pillars_content: dict) -> str:
     html = trimmed + pane + "</div></div>" + trailing_ws + sep + suffix
     return html
 
+
+def verify_ts_advantage_tab(html: str, slug: str) -> dict:
+    """
+    Deterministic post-injection verification for the ThoughtSpot Advantage
+    native tab. Call this immediately after inject_ts_advantage_tab().
+
+    Returns {"passed": bool, "failures": [str, ...]}. If passed is False,
+    remove the injected tab and log the failures listed -- never ship a
+    report with a failing check, and never write a replacement for this
+    function. Two of these checks (button-in-tab-nav position, sub-nav
+    background) exist specifically because freehand-reimplemented
+    versions of this check shipped both bugs undetected.
+
+    Assumes the caller followed the required content format from Step 10:
+    each altitude's HTML contains an <h4>{pillar name}</h4> heading (or,
+    for elevator, a leading <strong>{pillar name}.</strong>) for each of
+    the three canonical pillars, in order.
+    """
+    import re
+    from ts_advantage_pillars import PILLARS
+
+    failures = []
+    tsa_slug = f"{slug}__tsa"
+
+    button_marker = "data-tab='ts_advantage'"
+    button_count = html.count(button_marker)
+    if button_count != 1:
+        failures.append(f"expected exactly 1 ts_advantage button, found {button_count}")
+    else:
+        tab_nav_open = html.find("<div class='tab-nav'>")
+        tab_nav_close = html.find("</div>", tab_nav_open) if tab_nav_open != -1 else -1
+        button_pos = html.find(button_marker)
+        if tab_nav_open == -1 or not (tab_nav_open < button_pos < tab_nav_close):
+            failures.append("ts_advantage button is not inside .tab-nav (will render invisible)")
+
+    pane_marker = f"id='{slug}_ts_advantage'"
+    pane_count = html.count(pane_marker)
+    if pane_count != 1:
+        failures.append(f"expected exactly 1 ts_advantage pane, found {pane_count}")
+
+    sub_btn_count  = html.count(f"tab-btn-{tsa_slug}")
+    sub_pane_count = html.count(f"tab-content-{tsa_slug}")
+    if sub_btn_count != 3:
+        failures.append(f"expected 3 sub-tab buttons, found {sub_btn_count}")
+    if sub_pane_count != 3:
+        failures.append(f"expected 3 sub-tab panes, found {sub_pane_count}")
+
+    sub_nav_match = re.search(r"<div class='tab-nav' style='([^']*)'>", html)
+    if sub_nav_match and "background:" in sub_nav_match.group(1):
+        failures.append("sub-nav has a background override -- .tab-btn text will render invisible")
+
+    # Check each of the executive and detailed sub-panes INDEPENDENTLY --
+    # searching the whole pane blob is not sufficient, since a pillar name
+    # missing from one altitude but still present in another would pass a
+    # whole-blob search undetected.
+    for section in ("executive", "detailed"):
+        section_marker = f"id='{tsa_slug}_{section}'"
+        section_start = html.find(section_marker)
+        if section_start == -1:
+            failures.append(f"{section} sub-pane not found")
+            continue
+        other_markers = [
+            html.find(f"id='{tsa_slug}_{other}'", section_start + 1)
+            for other in ("elevator", "executive", "detailed") if other != section
+        ]
+        other_markers = [m for m in other_markers if m != -1]
+        section_end = min(other_markers) if other_markers else len(html)
+        section_html = html[section_start:section_end]
+        last_pos = -1
+        for p in PILLARS:
+            pos = section_html.find(p["name"], last_pos + 1)
+            if pos == -1:
+                failures.append(f"{section} sub-pane missing or out-of-order pillar name: {p['name']!r}")
+                break
+            last_pos = pos
+
+    pane_start = html.find(pane_marker)
+    pane_html  = html[pane_start:] if pane_start != -1 else ""
+    if "{{" in pane_html:
+        failures.append("unresolved {{PLACEHOLDER}} tokens remain in the ts_advantage pane")
+
+    return {"passed": len(failures) == 0, "failures": failures}
+
+
 def _get_tabs() -> list:
     return [
         ("overview",      "🏢 Overview"),
@@ -1868,5 +1952,25 @@ if __name__ == "__main__":
     assert new_html.count("tab-content-acme__tsa") == 3
     assert new_html.count("<div") == new_html.count("</div>")
     print("✅ inject_ts_advantage_tab() structural checks (3 sub-tabs, div balance)")
+
+    # verify_ts_advantage_tab() must PASS on well-formed content...
+    from ts_advantage_pillars import PILLARS
+    good_content = {
+        "elevator_html": "".join(f"<p><strong>{p['name']}.</strong> hook.</p>" for p in PILLARS),
+        "executive_html": "".join(f"<h4>{p['name']}</h4><p>outcome.</p>" for p in PILLARS),
+        "detailed_html": "".join(f"<h4>{p['name']}</h4><p>3x3 + persona + moment of joy.</p>" for p in PILLARS),
+    }
+    good_html = inject_ts_advantage_tab(html, "acme", good_content)
+    result = verify_ts_advantage_tab(good_html, "acme")
+    assert result["passed"], f"REGRESSION: verify_ts_advantage_tab() should pass on well-formed content, got: {result['failures']}"
+    print("✅ verify_ts_advantage_tab() passes on well-formed content")
+
+    # ...and must FAIL when a pillar name is missing (proves it can actually catch a real gap)
+    bad_content = dict(good_content)
+    bad_content["executive_html"] = bad_content["executive_html"].replace(PILLARS[1]["name"], "Some Other Name")
+    bad_html = inject_ts_advantage_tab(html, "acme", bad_content)
+    result = verify_ts_advantage_tab(bad_html, "acme")
+    assert not result["passed"], "verify_ts_advantage_tab() failed to catch a missing pillar name"
+    print(f"✅ verify_ts_advantage_tab() correctly fails on bad content: {result['failures']}")
 
     print("\nSelf-test complete.")
