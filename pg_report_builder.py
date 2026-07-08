@@ -1298,7 +1298,11 @@ def inject_ts_advantage_tab(html: str, slug: str, pillars_content: dict) -> str:
         f"<p style='font-size:11px;font-weight:700;color:#94A3B8;text-transform:uppercase;"
         f"letter-spacing:1px;margin:0 0 12px;'>Never open at a lower altitude than the most "
         f"senior person in the room.</p>"
-        f"<div class='tab-nav' style='padding:0;background:transparent;box-shadow:none;"
+        # NOTE: do not override background here. .tab-btn's class CSS sets
+        # near-white text (rgba(255,255,255,0.65)) designed to sit on
+        # .tab-nav's navy background -- stripping that background to
+        # transparent leaves near-white text on the white page, invisible.
+        f"<div class='tab-nav' style='padding:8px 12px;border-radius:8px;box-shadow:none;"
         f"position:static;'>{sub_nav}</div>"
         f"<div style='padding-top:20px;'>{sub_panes}</div>"
         f"</div>"
@@ -1817,3 +1821,52 @@ li::before {{ content: '→'; color: {BLUE}; font-weight: 700; flex-shrink: 0; m
 
     print(f"[pg_report_builder v5.8] One-pager built → {filename}")
     return {"filename": filename, "html": full_html, "slug": slug}
+
+
+if __name__ == "__main__":
+    import re
+
+    print("=== pg_report_builder.py self-test ===\n")
+
+    raw = {"web_research": {"description": {"text": "Acme is a widget company."}}}
+    ts_data = {}
+    matched_drivers = []
+    header_data = {"owner_name": "Test AE"}
+
+    result = build_pg_report("acme", "Acme Corp", raw, ts_data, matched_drivers, header_data)
+    html = result["html"]
+    assert len(html) > 1000
+    print("✅ build_pg_report() produces HTML")
+
+    pillars_content = {
+        "elevator_html": "<p>e</p>", "executive_html": "<p>x</p>", "detailed_html": "<p>d</p>",
+    }
+    new_html = inject_ts_advantage_tab(html, "acme", pillars_content)
+
+    # Regression check: ts_advantage button must render INSIDE .tab-nav, not
+    # after it. Shipped broken once already -- the button existed in the
+    # HTML but rendered invisible because it sat outside the container that
+    # gives it the dark background and flex layout.
+    tab_nav_open  = new_html.find("<div class='tab-nav'>")
+    tab_nav_close = new_html.find("</div>", tab_nav_open)
+    button_pos    = new_html.find("data-tab='ts_advantage'")
+    assert tab_nav_open < button_pos < tab_nav_close, \
+        "REGRESSION: ts_advantage button rendered outside .tab-nav (invisible)"
+    print("✅ inject_ts_advantage_tab() button is inside .tab-nav")
+
+    # Regression check: the altitude sub-nav must not override its inherited
+    # navy background. .tab-btn's class CSS sets near-white text designed to
+    # sit on that background -- override it to transparent and the buttons
+    # become invisible white-on-white. Shipped broken once already too.
+    sub_nav_match = re.search(r"<div class='tab-nav' style='([^']*)'>", new_html)
+    assert sub_nav_match, "sub-nav div not found"
+    assert "background:" not in sub_nav_match.group(1), \
+        "REGRESSION: sub-nav background override makes .tab-btn text invisible"
+    print("✅ inject_ts_advantage_tab() sub-nav keeps inherited navy background")
+
+    assert new_html.count("tab-btn-acme__tsa") == 3
+    assert new_html.count("tab-content-acme__tsa") == 3
+    assert new_html.count("<div") == new_html.count("</div>")
+    print("✅ inject_ts_advantage_tab() structural checks (3 sub-tabs, div balance)")
+
+    print("\nSelf-test complete.")
