@@ -1243,6 +1243,71 @@ def _outreach_section(outreach_data: dict) -> str:
             out += "</ul>"
         out += "</div>"
     return out
+
+def inject_ts_advantage_tab(html: str, slug: str, pillars_content: dict) -> str:
+    """
+    Inject the ThoughtSpot Advantage section as a native 13th tab into
+    build_pg_report()'s output HTML, reusing the existing .tab-btn /
+    .tab-content CSS classes and the single showTab(slug, tabId) JS
+    function already defined in the page. Adds no new <style> or
+    <script> block — the altitude sub-tabs reuse showTab() via a
+    nested slug ("{slug}__tsa"), which is a distinct class string from
+    the outer 12 tabs' "{slug}" classes, so nothing collides.
+
+    pillars_content must have keys "elevator_html", "executive_html",
+    "detailed_html" — each a pre-built, already-escaped HTML string for
+    that altitude (the caller does all content synthesis; this function
+    only handles structural injection).
+
+    Raises ValueError if either anchor isn't found exactly once in html.
+    Callers should catch this, skip injection, and log rather than retry
+    or guess at a different anchor.
+    """
+    tsa_slug = f"{slug}__tsa"
+
+    button = (
+        f"<button class='tab-btn tab-btn-{slug} ' data-tab='ts_advantage' "
+        f"onclick=\"showTab('{slug}','ts_advantage')\">🎯 ThoughtSpot Advantage</button>"
+    )
+    anchor_button = "</div><div class='content'>"
+    if html.count(anchor_button) != 1:
+        raise ValueError("tab-nav/content boundary not found exactly once — skip injection")
+    html = html.replace(anchor_button, "</div>" + button + "<div class='content'>", 1)
+
+    sub_nav = "".join(
+        f"<button class='tab-btn tab-btn-{tsa_slug}{' active' if i == 0 else ''}' "
+        f"data-tab='{tab_id}' onclick=\"showTab('{tsa_slug}','{tab_id}')\">{label}</button>"
+        for i, (tab_id, label) in enumerate([
+            ("elevator", "01 · ELEVATOR"), ("executive", "02 · EXECUTIVE"), ("detailed", "03 · DETAILED"),
+        ])
+    )
+    sub_panes = "".join(
+        f"<div id='{tsa_slug}_{tab_id}' class='tab-content tab-content-{tsa_slug}{' active' if i == 0 else ''}'>"
+        f"{content_html}</div>"
+        for i, (tab_id, content_html) in enumerate([
+            ("elevator", pillars_content["elevator_html"]),
+            ("executive", pillars_content["executive_html"]),
+            ("detailed", pillars_content["detailed_html"]),
+        ])
+    )
+    pane = (
+        f"<div id='{slug}_ts_advantage' class='tab-content tab-content-{slug}'>"
+        f"<p style='font-size:11px;font-weight:700;color:#94A3B8;text-transform:uppercase;"
+        f"letter-spacing:1px;margin:0 0 12px;'>Never open at a lower altitude than the most "
+        f"senior person in the room.</p>"
+        f"<div class='tab-nav' style='padding:0;background:transparent;box-shadow:none;"
+        f"position:static;'>{sub_nav}</div>"
+        f"<div style='padding-top:20px;'>{sub_panes}</div>"
+        f"</div>"
+    )
+    prefix, sep, suffix = html.partition("<script>")
+    if not sep or not prefix.rstrip().endswith("</div></div>"):
+        raise ValueError("script/content-close boundary not found as expected — skip injection")
+    trimmed = prefix.rstrip()[: -len("</div></div>")]
+    trailing_ws = prefix[len(prefix.rstrip()):]
+    html = trimmed + pane + "</div></div>" + trailing_ws + sep + suffix
+    return html
+
 def _get_tabs() -> list:
     return [
         ("overview",      "🏢 Overview"),
