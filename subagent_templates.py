@@ -1095,18 +1095,28 @@ Load the JSON file and apply:
    reference for all LinkedIn messages.
 
 3. Find the confirmed competitor key (e.g. "Tableau competitive", "Looker competitive",
-   "Power BI competitive") — reference the competitive angle in Email 2 subject line.
-   Cite the asset as: source="GTM Buddy", url="https://thoughtspot.gtmbuddy.io/viewer/{{id}}"
+   "Power BI competitive") — use its competitive angle to inform Email 2's subject line
+   and body copy (the angle itself, in your own words, goes into the visible text).
+   Separately, add a claim_annotations entry on Email 2 citing the asset:
+   source="GTM Buddy", url="https://thoughtspot.gtmbuddy.io/viewer/{{id}}"
+   Never put the asset title, a bracketed reference, or the citation itself into the
+   visible subject line or body — only the angle/content it informed.
 
-4. Find top case study from "Case Studies" key — cite the asset title + GTM Buddy link
-   in Email 3 or the LinkedIn note.
-   Cite as: source="GTM Buddy", url="https://thoughtspot.gtmbuddy.io/viewer/{{id}}"
+4. Find top case study from "Case Studies" key. Its outcome/metric may inform Email 3
+   or the LinkedIn note's body copy in your own words (e.g. "cut dashboard development
+   time by 42%") — never insert the asset's title or a bracketed reference (e.g.
+   "[Insurance Case Study]") into the visible text. Instead, add a claim_annotations
+   entry on that message citing the asset:
+   source="GTM Buddy", url="https://thoughtspot.gtmbuddy.io/viewer/{{id}}"
 
 5. Add a "gtmbuddy_refs" array at the SEQUENCE level (once per contact, not per email):
    "gtmbuddy_refs": [
      {{"id": "...", "title": "...", "url": "https://thoughtspot.gtmbuddy.io/viewer/...", "category": "..."}}
    ]
-   Include every GTM Buddy asset you referenced in that contact's sequence.
+   Include every GTM Buddy asset you referenced in that contact's sequence. This array
+   is rendered separately in the final report as a per-contact "Referenced Assets" list —
+   it is the correct and only place for asset references. Do not also embed them inline
+   in email/LinkedIn body or subject text.
 
 All claim_annotations that reference a GTM Buddy asset MUST include:
   "source": "https://thoughtspot.gtmbuddy.io/viewer/{{id}}"

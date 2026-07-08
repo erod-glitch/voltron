@@ -1226,6 +1226,21 @@ def _outreach_section(outreach_data: dict) -> str:
                     out += "</div>"
                 else:
                     out += f"<pre style='background:#f8faff;border-radius:8px;padding:14px;font-size:12px;'>{_e(str(msg))}</pre>"
+        refs = seq.get("gtmbuddy_refs", [])
+        if refs:
+            out += f"<p style='font-size:11px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:1px;margin:14px 0 8px;'>Referenced Assets</p>"
+            out += "<ul style='margin:0;padding-left:16px;'>"
+            for r in refs:
+                if not isinstance(r, dict): continue
+                r_title = _e(r.get("title", "") or r.get("id", "Untitled asset"))
+                r_url   = r.get("url", "")
+                r_cat   = _e(r.get("category", ""))
+                cat_suffix = f" <span style='color:#94A3B8;'>· {r_cat}</span>" if r_cat else ""
+                if r_url:
+                    out += f"<li style='margin-bottom:4px;font-size:12px;'><a href='{_e(r_url)}' target='_blank' style='color:{BLUE};'>{r_title} ↗</a>{cat_suffix}</li>"
+                else:
+                    out += f"<li style='margin-bottom:4px;font-size:12px;'>{r_title}{cat_suffix}</li>"
+            out += "</ul>"
         out += "</div>"
     return out
 def _get_tabs() -> list:
