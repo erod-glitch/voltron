@@ -53,6 +53,12 @@ INTENT_MAP = {
         "revops",
         "[Account Name] [Person 6S Intent Score] [Account Owner Name] = '{owner_name}'"
     ),
+    "6sense_account_intent": (
+        "revops",
+        "[Account Name] [Account 6S Intent Score] [Account 6S Reach Score] [Account Consolidated Intent Level] [Account Owner Name] [Account Owner Name] = '{owner_name}'",
+        "revops",
+        "[Account Name] [Account 6S Intent Score] [Account 6S Reach Score] [Account Owner Name] = '{owner_name}'"
+    ),
     "last_activity": (
         "revops",
         "[Account Name] [Account Last Activity Date] [Days from Account last touch] [Account last touch grouped] [Account Owner Name] [Account Owner Name] = '{owner_name}'",
@@ -251,6 +257,8 @@ def _attempt(
         query_used    : str
         used_fallback : bool
         message       : str
+        error_code    : "" | "missing_env" | "bad_worksheet" | "timeout" |
+                        "request_exception" | "http_error" | "parse_error"
     """
     base = {
         "status":        "error",
@@ -259,6 +267,7 @@ def _attempt(
         "query_used":    "",
         "used_fallback": used_fallback,
         "message":       "",
+        "error_code":    "",
     }
 
     try:
@@ -276,7 +285,8 @@ def _attempt(
         return base
 
     if "_error" in raw:
-        base["message"] = raw.get("_message", "Unknown error.")
+        base["message"]    = raw.get("_message", "Unknown error.")
+        base["error_code"] = raw.get("_error", "")
         return base
 
     col_names, rows_or_err = _parse_response(raw)
@@ -336,6 +346,7 @@ def run_with_fallback(intent: str, timeout: int = 20, **variables) -> dict:
         "message":       "",
         "intent":        intent,
         "query_used":    "",
+        "error_code":    "",
     }
 
     if intent not in INTENT_MAP:
@@ -392,8 +403,75 @@ def run_with_fallback(intent: str, timeout: int = 20, **variables) -> dict:
         base["intent"] = intent
         return base
 
-    base["message"] = f"Primary: {primary_msg} | Fallback: {result2['message']}"
-    base["intent"]  = intent
+    base["message"]    = f"Primary: {primary_msg} | Fallback: {result2['message']}"
+    base["error_code"] = result.get("error_code") or result2.get("error_code") or ""
+    base["intent"]     = intent
+    return base
+
+
+# ---------------------------------------------------------------------------
+# Spotter fallback normalizer
+#
+# The Python sandbox has no THOUGHTSPOT_TOKEN/THOUGHTSPOT_URL — run_with_fallback()
+# will return error_code="missing_env" every time in that environment. Only the
+# agent itself can call ask_spotter_question()/get_spotter_query_status() (they
+# are agent-layer tool calls, not importable from sandbox Python). When that
+# happens, the agent calls Spotter directly, reads its answer, transcribes the
+# rows into a plain list of dicts, and hands that list here — this function's
+# only job is reshaping already-extracted records into the same envelope
+# run_with_fallback() returns, so every downstream consumer (ts_parallel.py,
+# pg_report_builder.py) treats Spotter-sourced and direct-HTTP-sourced data
+# identically.
+# ---------------------------------------------------------------------------
+
+def normalize_spotter_result(intent: str, records: list) -> dict:
+    """
+    Reshape agent-transcribed Spotter rows into the run_with_fallback() envelope.
+
+    Parameters
+    ----------
+    intent  : Key from INTENT_MAP (e.g. "6sense_account_intent") — used only
+              for the returned "intent" field and unknown-intent validation.
+    records : List of dicts, one per row, already extracted by the agent from
+              Spotter's answer (column name -> value). A single dict is also
+              accepted and wrapped into a one-row list.
+
+    Returns
+    -------
+    dict with the same keys as run_with_fallback(): status, column_names,
+    data_rows, used_fallback, message, intent, query_used, error_code, source.
+    """
+    base = {
+        "status":        "error",
+        "column_names":  [],
+        "data_rows":     [],
+        "used_fallback": False,
+        "message":       "",
+        "intent":        intent,
+        "query_used":    "",
+        "error_code":    "",
+        "source":        "spotter",
+    }
+
+    if intent not in INTENT_MAP:
+        base["message"] = (
+            f"Unknown intent: {intent!r}. "
+            f"Valid intents: {list(INTENT_MAP.keys())}"
+        )
+        return base
+
+    if not records:
+        base["status"]  = "empty"
+        base["message"] = "Spotter returned 0 rows."
+        return base
+
+    if isinstance(records, dict):
+        records = [records]
+
+    base["status"]       = "ok"
+    base["column_names"] = list(records[0].keys())
+    base["data_rows"]    = records
+    base["message"]      = f"{len(records)} rows returned via Spotter."
     return base
 
 

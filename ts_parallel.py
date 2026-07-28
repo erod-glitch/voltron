@@ -5,7 +5,7 @@ Uses raw threading — concurrent.futures is blocked in PTC sandbox.
 
 Usage:
     from ts_parallel import run_ts_batch, run_ts_batch_for_accounts,
-                           check_token_expiry, TERRITORY_FILTER_INTENTS
+                           check_token_expiry, check_missing_env, TERRITORY_FILTER_INTENTS
 
     results = run_ts_batch([
         ("deal_stage",         {"account_name": "Acme Corp"}),
@@ -15,6 +15,12 @@ Usage:
 
     if check_token_expiry(results):
         print("⚠️ TOKEN_EXPIRED")
+
+    if check_missing_env(results):
+        # THOUGHTSPOT_TOKEN/THOUGHTSPOT_URL not set in this sandbox — agent
+        # must fall back to ask_spotter_question() per intent, see
+        # ts_fallback_map.normalize_spotter_result()
+        print("⚠️ MISSING_ENV — fall back to Spotter")
 
     if results["deal_stage"]["status"] == "ok":
         rows = results["deal_stage"]["data_rows"]
@@ -44,7 +50,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 TERRITORY_FILTER_INTENTS = [
-    "6sense_intent",
+    "6sense_account_intent",
     "last_activity",
     "icp_scores",
     "account_vertical",
@@ -105,6 +111,25 @@ def check_token_expiry(results: dict) -> bool:
     """
     return any(
         v.get("status") == "token_expired"
+        for k, v in results.items()
+        if k != "_token_expired" and isinstance(v, dict)
+    )
+
+
+def check_missing_env(results: dict) -> bool:
+    """
+    Return True if any result failed because THOUGHTSPOT_TOKEN/THOUGHTSPOT_URL
+    aren't set in this sandbox — the signal to fall back to the agent calling
+    ask_spotter_question()/get_spotter_query_status() directly, transcribing
+    the rows, and passing them through ts_fallback_map.normalize_spotter_result()
+    instead of retrying the direct-HTTP path.
+
+    Use immediately after run_ts_batch() or run_ts_batch_for_accounts():
+        if check_missing_env(results):
+            # Fall back to Spotter per intent — see ts_fallback_map.normalize_spotter_result()
+    """
+    return any(
+        v.get("error_code") == "missing_env"
         for k, v in results.items()
         if k != "_token_expired" and isinstance(v, dict)
     )
@@ -363,24 +388,47 @@ def extract_owner_from_ts_results(ts_results: dict) -> str:
 
 def run_6sense_followon(owner_name: str, timeout: int = 15) -> dict:
     """
-    Fire 6sense_intent as a single follow-on call after the main batch,
-    once owner_name is known from sfdc_stakeholder results.
+    Fire the 6Sense follow-on queries after the main batch, once owner_name
+    is known from sfdc_stakeholder results.
 
-    Returns the 6sense result dict or empty dict on failure.
+    Fires TWO independent queries, not one — they hit different underlying
+    tables (SFDC_ACCOUNT vs SFDC_PERSON) and must stay separate. Combining
+    account-level and person-level 6Sense columns into a single query forces
+    ThoughtSpot to join across those tables, and an account with no scored
+    individual contact then returns zero rows entirely — silently hiding
+    real account-level intent data behind a missing person-level join.
+
+    Returns {"6sense_account_intent": {...}, "6sense_intent": {...}} —
+    merge both keys into ts_data (e.g. ts_data.update(...)), don't assign
+    the whole return value to a single "6sense_intent" key.
     """
     if not owner_name:
-        return {
+        skipped = {
             "status":       "skipped",
             "data_rows":    [],
             "column_names": [],
             "reason":       "owner_name empty — cannot query 6sense by owner",
         }
-    result = run_with_fallback("6sense_intent", owner_name=owner_name, timeout=timeout)
-    print(
-        f"[ts_parallel] 6sense follow-on for '{owner_name}': "
-        f"{result.get('status')} — {len(result.get('data_rows', []))} rows"
+        return {"6sense_account_intent": dict(skipped), "6sense_intent": dict(skipped)}
+
+    results = run_ts_batch(
+        [
+            ("6sense_account_intent", {"owner_name": owner_name}),
+            ("6sense_intent",         {"owner_name": owner_name}),
+        ],
+        max_workers=2,
+        timeout=timeout,
     )
-    return result
+    for key in ("6sense_account_intent", "6sense_intent"):
+        r = results.get(key, {})
+        print(
+            f"[ts_parallel] 6sense follow-on '{key}' for '{owner_name}': "
+            f"{r.get('status')} — {len(r.get('data_rows', []))} rows"
+        )
+    return {
+        "6sense_account_intent": results.get("6sense_account_intent", {}),
+        "6sense_intent":         results.get("6sense_intent", {}),
+    }
 
 
 # ---------------------------------------------------------------------------

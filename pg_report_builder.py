@@ -990,23 +990,74 @@ def _gong_calls_section(raw: dict) -> str:
     return out
 
 def _6sense_section(ts_data: dict) -> str:
-    rows = ts_data.get("6sense_intent", {}).get("data_rows", [])
-    cols = ts_data.get("6sense_intent", {}).get("column_names", [])
-    if not rows: return "<p style='color:#94A3B8;'>No 6Sense intent data available.</p>"
-    out = "<table><thead><tr><th>Account</th><th>Intent Grade</th><th>Reach Grade</th></tr></thead><tbody>"
-    for row in rows[:10]:
-        rec = dict(zip(cols, row)) if isinstance(row, list) else row
-        intent_score = (rec.get("Person 6S Intent Score")
-                        or rec.get("Total Person 6S Intent Score")
-                        or "")
-        intent_grade = _score_to_grade(intent_score)
-        reach_raw    = rec.get("Account Snapshot 6S Reach Score", "")
-        reach_grade  = reach_raw if reach_raw else "N/A"  # already High/Med/Low string
+    acct        = ts_data.get("6sense_account_intent", {})
+    person      = ts_data.get("6sense_intent", {})
+    acct_rows   = acct.get("data_rows", [])
+    acct_cols   = acct.get("column_names", [])
+    person_rows = person.get("data_rows", [])
+    person_cols = person.get("column_names", [])
 
-        grade_color  = "#16A34A" if "A" in intent_grade else "#D97706" if intent_grade == "B" else "#94A3B8"
-        out += (f"<tr><td>{_e(rec.get('Account Name', ''))}</td>"
-                f"<td><span style='color:{grade_color};font-weight:700;font-size:16px;'>{_e(intent_grade)}</span></td>"
-                f"<td><span style='font-weight:600;'>{_e(reach_grade)}</span></td></tr>")
+    if not acct_rows and not person_rows:
+        return "<p style='color:#94A3B8;'>No 6Sense intent data available.</p>"
+
+    acct_by_name = {}
+    for row in acct_rows[:10]:
+        rec  = dict(zip(acct_cols, row)) if isinstance(row, list) else row
+        name = rec.get("Account Name", "")
+        if name:
+            acct_by_name[name] = rec
+
+    person_by_name = {}
+    for row in person_rows[:10]:
+        rec  = dict(zip(person_cols, row)) if isinstance(row, list) else row
+        name = rec.get("Account Name", "")
+        if name:
+            person_by_name[name] = rec
+
+    names = list(acct_by_name.keys())
+    for name in person_by_name:
+        if name not in acct_by_name:
+            names.append(name)
+
+    out = ("<table><thead><tr><th>Account</th><th>Account Intent</th>"
+           "<th>Account Reach</th><th>Named Buyer Intent</th></tr></thead><tbody>")
+
+    for name in names[:10]:
+        arec = acct_by_name.get(name, {})
+        prec = person_by_name.get(name, {})
+
+        # Account-level: lead with the pre-graded label 6Sense/SFDC already
+        # computed (e.g. "2) Hot") rather than re-deriving a grade from the
+        # raw score — _score_to_grade()'s thresholds were built for the
+        # Person-intent-sum and ICP-score scales, not this field.
+        consolidated = arec.get("Account Consolidated Intent Level", "")
+        if consolidated:
+            acct_intent_display = _e(consolidated)
+            grade_color = (
+                "#16A34A" if "hot" in consolidated.lower()
+                else "#D97706" if "warm" in consolidated.lower()
+                else "#94A3B8"
+            )
+        else:
+            acct_intent_raw = arec.get("Account 6S Intent Score", "")
+            acct_intent_display = _e(str(acct_intent_raw)) if acct_intent_raw != "" else "N/A"
+            grade_color = "#94A3B8"
+
+        reach_raw   = arec.get("Account 6S Reach Score", "")
+        reach_grade = reach_raw if reach_raw else "N/A"  # already High/Med/Low string
+
+        person_intent_raw = (prec.get("Person 6S Intent Score")
+                              or prec.get("Total Person 6S Intent Score")
+                              or "")
+        if person_intent_raw != "":
+            person_display = _e(_score_to_grade(person_intent_raw))
+        else:
+            person_display = "<span style='color:#94A3B8;font-size:11px;'>No contact scored</span>"
+
+        out += (f"<tr><td>{_e(name)}</td>"
+                f"<td><span style='color:{grade_color};font-weight:700;font-size:15px;'>{acct_intent_display}</span></td>"
+                f"<td><span style='font-weight:600;'>{_e(reach_grade)}</span></td>"
+                f"<td>{person_display}</td></tr>")
     out += "</tbody></table>"
     return out
 
@@ -1551,9 +1602,9 @@ def build_pg_report(
     owner         = header_data.get("owner_name", "AE")
     region        = header_data.get("region", "")
     now           = datetime.datetime.utcnow().strftime("%B %d, %Y")
-    why_now         = header_data.get("why_now", "")
-    why_anything    = header_data.get("why_anything", "")
-    why_thoughtspot = header_data.get("why_thoughtspot", "")
+    why_now         = header_data.get("why_now")
+    why_anything    = header_data.get("why_anything")
+    why_thoughtspot = header_data.get("why_thoughtspot")
     opp_stage       = header_data.get("opp_stage", "")
     opp_name      = header_data.get("opp_name", "")
 
@@ -1694,9 +1745,14 @@ def build_pg_report(
         "Funnel timing rendered":    "Funnel Timing" in html or not ts_data.get("deal_funnel_timing", {}).get("data_rows"),
         "Gong calls rendered":       "signal-card" in html or "No Gong call" in html or not raw.get("sales_calls"),
         "No empty claim bodies":     len(_empty_details) == 0,
+        "Why Now generated":         why_now is not None,
+        "Why Anything generated":    why_anything is not None,
+        "Why ThoughtSpot generated": why_thoughtspot is not None,
         "Why Now rendered":          "Why Now" in html or not why_now,
         "Why Anything rendered":     "Why Anything" in html or not why_anything,
         "Why ThoughtSpot rendered": "Why ThoughtSpot" in html or not why_thoughtspot,
+        "6Sense intent data present": bool(ts_data.get("6sense_account_intent", {}).get("data_rows")
+                                            or ts_data.get("6sense_intent", {}).get("data_rows")),
     }
 
     failed = [k for k, v in checks.items() if not v]
